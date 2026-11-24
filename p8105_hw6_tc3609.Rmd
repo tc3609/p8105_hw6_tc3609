@@ -1,0 +1,126 @@
+---
+title: "p8105_hw6_tc3609"
+author: "Joanna Chuang"
+date: "2026-11-23"
+output: github_document
+---
+
+# Problem 1
+
+```{r setup, message=FALSE}
+library(tidyverse)
+library(broom)
+```
+
+```{r problem1}
+homicide_df =
+  read_csv(
+    "https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv",
+    na = c("", "Unknown"),
+    show_col_types = FALSE
+  ) |>
+  mutate(
+    city_state = str_c(city, state, sep = ", "),
+    resolved = if_else(disposition == "Closed by arrest", 1, 0),
+    victim_age = as.numeric(victim_age)
+  ) |>
+  filter(
+    !city_state %in% c(
+      "Dallas, TX",
+      "Phoenix, AZ",
+      "Kansas City, MO",
+      "Tulsa, AL"
+    ),
+    victim_race %in% c("White", "Black")
+  ) |>
+  mutate(
+    victim_sex = factor(victim_sex, levels = c("Female", "Male")),
+    victim_race = factor(victim_race, levels = c("White", "Black"))
+  )
+
+homicide_df
+
+baltimore_df =
+  homicide_df |>
+  filter(city_state == "Baltimore, MD")
+
+baltimore_fit =
+  glm(
+    resolved ~ victim_age + victim_sex + victim_race,
+    data = baltimore_df,
+    family = binomial()
+  )
+
+baltimore_fit
+
+baltimore_results =
+  baltimore_fit |>
+  broom::tidy(
+    conf.int = TRUE,
+    exponentiate = TRUE
+  ) |>
+  filter(term == "victim_sexMale") |>
+  select(term, estimate, conf.low, conf.high)
+
+baltimore_results |>
+  knitr::kable(digits = 4)
+
+city_results =
+  homicide_df |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    model = map(
+      data,
+      ~ glm(
+        resolved ~ victim_age + victim_sex + victim_race,
+        data = .x,
+        family = binomial()
+      )
+    ),
+    results = map(
+      model,
+      ~ broom::tidy(
+        .x,
+        conf.int = TRUE,
+        exponentiate = TRUE
+      )
+    )
+  ) |>
+  select(city_state, results) |>
+  unnest(results) |>
+  filter(term == "victim_sexMale") |>
+  select(city_state, estimate, conf.low, conf.high) |>
+  ungroup()
+
+city_results |>
+  knitr::kable(digits = 4)
+```
+
+```{r problem1_plot, fig.width=10, fig.height=12}
+city_results |>
+  mutate(
+    city_state = fct_reorder(city_state, estimate)
+  ) |>
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high),
+    width = 0.2,
+    color = "steelblue"
+  ) +
+  geom_hline(
+    yintercept = 1,
+    linetype = "dashed",
+    color = "red"
+  ) +
+  coord_flip() +
+  labs(
+    title = "Adjusted Odds Ratios for Homicide Resolution by City",
+    subtitle = "Male victims compared with female victims",
+    x = "City",
+    y = "Adjusted Odds Ratio (95% CI)"
+  ) +
+  theme_minimal()
+```
+Most cities had odds ratios below 1, meaning that homicides involving male victims generally had lower odds of being solved than those involving female victims after adjusting for age and race. However, several cities had confidence intervals that included 1, so the difference was not statistically significant in those cities. Some cities also had wider confidence intervals, suggesting that their estimates were less precise.
