@@ -124,3 +124,138 @@ city_results |>
   theme_minimal()
 ```
 Most cities had odds ratios below 1, meaning that homicides involving male victims generally had lower odds of being solved than those involving female victims after adjusting for age and race. However, several cities had confidence intervals that included 1, so the difference was not statistically significant in those cities. Some cities also had wider confidence intervals, suggesting that their estimates were less precise.
+
+# Problem 2
+
+```{r problem2_data, message=FALSE}
+library(p8105.datasets)
+data("weather_df")
+
+weather_df =
+  weather_df |>
+  select(tmax, tmin, prcp) |>
+  drop_na()
+
+weather_df
+```
+
+```{r problem2_bootstrap_function}
+boot_sample = function(df) {
+  sample_frac(df, size = 1, replace = TRUE)
+}
+```
+
+```{r problem2_bootstrap_simulation}
+set.seed(123)
+
+boot_results =
+  tibble(
+    replicate = 1:5000
+  ) |>
+  mutate(
+    boot_sample = map(
+      replicate, ~ boot_sample(weather_df)
+    ),
+    model = map(
+      boot_sample,
+      ~ lm(tmax ~ tmin + prcp, data = .x)
+    ),
+    glance_results = map(model, broom::glance),
+    tidy_results = map(model, broom::tidy)
+  )
+
+boot_results
+```
+
+```{r problem2_r_squared}
+r_squared_results =
+  boot_results |>
+  select(replicate, glance_results) |>
+  unnest(glance_results) |>
+  select(replicate, r.squared)
+
+r_squared_results
+```
+
+```{r problem2_beta_ratio}
+beta_results =
+  boot_results |>
+  select(replicate, tidy_results) |>
+  unnest(tidy_results) |>
+  filter(term %in% c("tmin", "prcp")) |>
+  select(replicate, term, estimate) |>
+  pivot_wider(
+    names_from = term,
+    values_from = estimate
+  ) |>
+  mutate(
+    beta_ratio = tmin / prcp
+  ) |>
+  select(replicate, beta_ratio)
+
+beta_results
+```
+
+```{r problem2_combine}
+bootstrap_estimates =
+  left_join(
+    r_squared_results,
+    beta_results,
+    by = "replicate"
+  )
+
+bootstrap_estimates
+```
+
+```{r problem2_r_squared_plot}
+bootstrap_estimates |>
+  ggplot(aes(x = r.squared)) +
+  geom_density(
+    fill = "steelblue",
+    alpha = 0.5
+  ) +
+  labs(
+    title = "Bootstrap Distribution of R-squared",
+    x = "R-squared",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+The bootstrap distribution of R-squared is roughly bell-shaped with a slight left skew and is centered around 0.941. The estimates are concentrated within a narrow range, suggesting that R-squared remains mostly consistent across bootstrap samples. The 95% bootstrap confidence interval is (0.9344, 0.9466).
+
+```{r problem2_beta_ratio_plot}
+bootstrap_estimates |>
+  ggplot(aes(x = beta_ratio)) +
+  geom_density(
+    fill = "steelblue",
+    alpha = 0.5
+  ) +
+  labs(
+    title = "Bootstrap Distribution of the Coefficient Ratio",
+    x = expression(hat(beta)[1] / hat(beta)[2]),
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+The bootstrap distribution of the coefficient ratio is left-skewed, with a longer tail toward more negative values. The mean estimate is −185.4894, and the 95% bootstrap confidence interval is (−277.1703, −125.7063).
+
+```{r problem2_confidence_intervals}
+bootstrap_ci =
+  bootstrap_estimates |>
+  pivot_longer(
+    cols = c(r.squared, beta_ratio),
+    names_to = "statistic",
+    values_to = "estimate"
+  ) |>
+  group_by(statistic) |>
+  summarize(
+    mean_estimate = mean(estimate),
+    conf.low = quantile(estimate, 0.025),
+    conf.high = quantile(estimate, 0.975),
+    .groups = "drop"
+  )
+
+bootstrap_ci |>
+  knitr::kable(digits = 4)
+```
