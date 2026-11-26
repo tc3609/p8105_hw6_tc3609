@@ -259,3 +259,216 @@ bootstrap_ci =
 bootstrap_ci |>
   knitr::kable(digits = 4)
 ```
+
+# Problem 3
+
+```{r problem3_data, message=FALSE}
+library(modelr)
+library(janitor)
+
+birthweight_df =
+  read_csv("data/birthweight.csv", show_col_types = FALSE) |>
+  janitor::clean_names() |>
+  mutate(
+    babysex = factor(
+      babysex,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    frace = factor(
+      frace,
+      levels = c(1, 2, 3, 4, 8, 9),
+      labels = c("White", "Black", "Asian",
+                 "Puerto Rican", "Other", "Unknown")
+    ),
+    mrace = factor(
+      mrace,
+      levels = c(1, 2, 3, 4, 8),
+      labels = c("White", "Black", "Asian",
+                 "Puerto Rican", "Other")
+    ),
+    malform = factor(
+      malform,
+      levels = c(0, 1),
+      labels = c("Absent", "Present")
+    )
+  )
+
+birthweight_df
+```
+
+```{r problem3_missing_values}
+birthweight_df |>
+  summarize(
+    across(everything(), ~ sum(is.na(.x)))
+  ) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "missing"
+  ) |>
+  knitr::kable()
+```
+
+```{r problem3_proposed_model}
+my_model =
+  lm(
+    bwt ~ bhead + blength + gaweeks + babysex +
+      smoken + ppbmi + wtgain + momage,
+    data = birthweight_df
+  )
+
+my_model |>
+  broom::tidy() |>
+  knitr::kable(digits = 4)
+```
+
+```{r problem3_model_summary}
+my_model |>
+  broom::glance() |>
+  select(r.squared, adj.r.squared, sigma) |>
+  knitr::kable(digits = 4)
+```
+
+I selected variables based on their potential relationship with birthweight. Head circumference, birth length, gestational age, and baby sex were included to account for differences in fetal growth. I also included maternal smoking, pre-pregnancy BMI, weight gain during pregnancy, and maternal age because these factors may be related to birthweight. I avoided including maternal weight variables that were closely related to each other to reduce multicollinearity. The model explained approximately 69.9% of the variation in birthweight.
+
+```{r problem3_residual_plot}
+birthweight_df |>
+  add_predictions(my_model) |>
+  add_residuals(my_model) |>
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_hline(
+    yintercept = 0,
+    color = "red",
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted Birthweight (grams)",
+    y = "Residuals (grams)"
+  ) +
+  theme_minimal()
+```
+
+```{r problem3_comparison_model1}
+model_1 =
+  lm(
+    bwt ~ blength + gaweeks,
+    data = birthweight_df
+  )
+```
+
+```{r problem3_comparison_model2}
+model_2 =
+  lm(
+    bwt ~ bhead * blength * babysex,
+    data = birthweight_df
+  )
+```
+
+```{r problem3_cross_validation}
+set.seed(123)
+
+cv_df =
+  crossv_mc(
+    birthweight_df,
+    n = 100,
+    test = 0.2
+  ) |>
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+cv_df
+```
+
+```{r problem3_cv_models}
+cv_results =
+  cv_df |>
+  mutate(
+    my_model = map(
+      train,
+      ~ lm(
+        bwt ~ bhead + blength + gaweeks + babysex +
+          smoken + ppbmi + wtgain + momage,
+        data = .x
+      )
+    ),
+    model_1 = map(
+      train,
+      ~ lm(bwt ~ blength + gaweeks, data = .x)
+    ),
+    model_2 = map(
+      train,
+      ~ lm(bwt ~ bhead * blength * babysex, data = .x)
+    )
+  ) |>
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, rmse),
+    rmse_model_1 = map2_dbl(model_1, test, rmse),
+    rmse_model_2 = map2_dbl(model_2, test, rmse)
+  )
+
+cv_results
+```
+
+```{r problem3_cv_wrangle}
+cv_plot_df =
+  cv_results |>
+  select(starts_with("rmse_")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse"
+  ) |>
+  mutate(
+    model = recode(
+      model,
+      rmse_my_model = "Proposed Model",
+      rmse_model_1 = "Length + Gestational Age",
+      rmse_model_2 = "Head, Length, Sex + Interactions"
+    )
+  )
+
+cv_plot_df
+```
+
+```{r problem3_cv_plot}
+cv_plot_df |>
+  mutate(
+    model = fct_reorder(model, rmse)
+  ) |>
+  ggplot(aes(x = model, y = rmse)) +
+  geom_violin(
+    fill = "steelblue",
+    alpha = 0.5
+  ) +
+  geom_boxplot(
+    width = 0.1,
+    alpha = 0.6
+  ) +
+  coord_flip() +
+  labs(
+    title = "Cross-Validated Prediction Error",
+    x = "Regression Model",
+    y = "RMSE (grams)"
+  ) +
+  theme_minimal()
+```
+
+The proposed model had the lowest mean RMSE of 281.68 grams, followed by the interaction model at 288.38 grams. The model using only birth length and gestational age had the highest mean RMSE of 330.71 grams. The results suggest that including additional fetal and maternal characteristics improves birthweight prediction.
+
+```{r problem3_cv_summary}
+cv_plot_df |>
+  group_by(model) |>
+  summarize(
+    mean_rmse = mean(rmse),
+    median_rmse = median(rmse),
+    sd_rmse = sd(rmse),
+    .groups = "drop"
+  ) |>
+  arrange(mean_rmse) |>
+  knitr::kable(digits = 4)
+```
